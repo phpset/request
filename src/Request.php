@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace Request;
 
 
+// https://github.com/phpset/request
 class Request
 {
-    private $ch;
+    private static $ch = false;
     private $baseUrl = '';
+    private $lastResult = [];
+    private $retryCount = 5;
 
     private $headers = [
         'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -23,11 +26,26 @@ class Request
 
     public function __construct()
     {
-        $this->ch = curl_init();
-        curl_setopt($this->ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($this->ch, CURLOPT_FOLLOWLOCATION, 1);
-        curl_setopt($this->ch, CURLOPT_TIMEOUT, 1);
+        if (self::$ch != false) {
+            return;
+        }
+        self::$ch = curl_init();
+        $this->setOption(CURLOPT_RETURNTRANSFER, 1);
+        $this->setOption(CURLOPT_FOLLOWLOCATION, 1);
+        $this->setOption(CURLOPT_TIMEOUT_MS, 1000);
+        $this->setOption(CURLOPT_HEADER, 1);
     }
+
+    private function setOption($option, $value)
+    {
+        curl_setopt($this->getCh(), $option, $value);
+    }
+
+    private function getCh()
+    {
+        return self::$ch;
+    }
+
 
     public function setBaseUrl(string $url)
     {
@@ -36,35 +54,77 @@ class Request
 
     public function authBasic(string $username, string $password)
     {
-        curl_setopt($this->ch, CURLOPT_USERPWD, $username . ":" . $password);
+        $this->setOption(CURLOPT_USERPWD, $username . ":" . $password);
     }
 
     public function get(string $url, array $queryParams = [])
     {
         $url = $this->buildUrl($url, $queryParams);
-        curl_setopt($this->ch, CURLOPT_URL, $url);
-        curl_setopt($this->ch, CURLOPT_HTTPHEADER, $this->mergeHeaders());
-        curl_setopt($this->ch, CURLOPT_ENCODING, 'gzip');
+        $this->setOption(CURLOPT_URL, $url);
+        $this->setOption(CURLOPT_HTTPHEADER, $this->mergeHeaders());
+        $this->setOption(CURLOPT_ENCODING, 'gzip');
         return $this->exec();
     }
 
     public function post(string $url, array $data = [], array $queryParams = [])
     {
         $url = $this->buildUrl($url, $queryParams);
-        curl_setopt($this->ch, CURLOPT_URL, $url);
-        curl_setopt($this->ch, CURLOPT_HTTPHEADER, $this->mergeHeaders());
-        curl_setopt($this->ch, CURLOPT_POST, 1);
-        curl_setopt($this->ch, CURLOPT_POSTFIELDS, $data);
-        curl_setopt($this->ch, CURLOPT_ENCODING, 'gzip');
+        $this->setOption(CURLOPT_URL, $url);
+        $this->setOption(CURLOPT_HTTPHEADER, $this->mergeHeaders());
+        $this->setOption(CURLOPT_POST, 1);
+        $this->setOption(CURLOPT_POSTFIELDS, $data);
+        $this->setOption(CURLOPT_ENCODING, 'gzip');
         return $this->exec();
     }
 
     private function exec()
     {
-        $result = curl_exec($this->ch);
-        $result = json_decode($result, true);
-//        curl_getinfo($this->ch, CURLINFO_HTTP_CODE);
-        return $result;
+//        $startTime = microtime(true);
+        $response = curl_exec($this->getCh());
+        if ($response === false && $this->retryCount) {
+            for ($atempt = 1; $atempt <= $this->retryCount && $response === false; $atempt++) {
+                $response = curl_exec($this->getCh());
+            }
+        }
+//        echo 'request in ' . floor((microtime(true) - $startTime) * 1000) . PHP_EOL;
+
+        if ($response === false) {
+            throw new \Exception(curl_error($this->getCh()), curl_errno($this->getCh()));
+        }
+
+        $header_size = curl_getinfo($this->getCh(), CURLINFO_HEADER_SIZE);
+        $headers = substr($response, 0, $header_size);
+        $body = substr($response, $header_size);
+
+        $this->lastResult = [
+            'code' => (int)curl_getinfo($this->getCh(), CURLINFO_HTTP_CODE),
+            'headers' => $headers,
+            'body' => $body,
+            'url' => curl_getinfo($this->getCh(), CURLINFO_EFFECTIVE_URL),
+        ];
+
+//        $body = json_decode($body, true);
+        return $this->lastResult['body'];
+    }
+
+    public function lastCode()
+    {
+        return $this->lastResult['code'];
+    }
+
+    public function lastHeaders()
+    {
+        return $this->lastResult['headers'];
+    }
+
+    public function lastBody()
+    {
+        return $this->lastResult['body'];
+    }
+
+    public function lastUrl()
+    {
+        return $this->lastResult['url'];
     }
 
     private function buildUrl($url, array $queryParams = [])
