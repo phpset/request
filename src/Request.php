@@ -9,6 +9,7 @@ namespace Request;
 class Request
 {
     private static $ch = false;
+    private $throwExceptions = true;
     private $baseUrl = '';
     private $lastResult = [];
     private $retryCount = 5;
@@ -36,9 +37,19 @@ class Request
         $this->setOption(CURLOPT_HEADER, 1);
     }
 
-    private function setOption($option, $value)
+    public function setOption($option, $value)
     {
         curl_setopt($this->getCh(), $option, $value);
+    }
+
+    public function setRetryCount(int $count)
+    {
+        $this->retryCount = $count;
+    }
+
+    public function setThrowExceptions($bool)
+    {
+        $this->throwExceptions = $bool;
     }
 
     private function getCh()
@@ -89,7 +100,17 @@ class Request
 //        echo 'request in ' . floor((microtime(true) - $startTime) * 1000) . PHP_EOL;
 
         if ($response === false) {
-            throw new \Exception(curl_error($this->getCh()), curl_errno($this->getCh()));
+            if ($this->throwExceptions) {
+                throw new \Exception(curl_error($this->getCh()), curl_errno($this->getCh()));
+            } else {
+                $this->lastResult = [
+                    'code' => (int)curl_getinfo($this->getCh(), CURLINFO_HTTP_CODE),
+                    'headers' => false,
+                    'body' => false,
+                    'url' => curl_getinfo($this->getCh(), CURLINFO_EFFECTIVE_URL),
+                ];
+                return false;
+            }
         }
 
         $header_size = curl_getinfo($this->getCh(), CURLINFO_HEADER_SIZE);
